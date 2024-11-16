@@ -1,0 +1,191 @@
+#  Python script for Windows 10 that executes in the CMD console and uses the Google Gemini Pro Vision API to analyze images
+#  This example code has not been debugged.  Run through the LLM of your choice to modify for your configuration.
+"""  [do not leave triple quotes in comments of your run-time app as it can cause crashes]
+For each image in a folder, the Vision Model API examines the selected photo and comprehensively 
+lists the things visible in the photo, and separately counts the number of humans detected in the photo.
+First example of CSV List returned in the model response:
+[
+"van: a white conversion van, possibly a Ford Transit, parked on grass",
+"window: a dark tinted window on the van",
+"solar panel: rectangular panels on the roof of the van",
+"wheel: black wheels on the van",
+"tire: black tires on the van",
+"grass: green grass under and around the van",
+"tree: green leafy trees above and around the van, partially obscuring the sky",
+"sky: blue sky visible through the trees",
+"sunlight: bright sunlight coming through the trees, casting shadows",
+"house: a portion of a house with a light colored siding and dark roof is visible in the background",
+"shadow: shadows cast by the van and trees on the grass",
+"vehicle: front portion of a dark vehicle partially visible on the right edge of the image"
+]
+This response in [] is parseable by the python script, example script as follows:
+
+The example script will:
+
+Target a specified folder: Take the folder path as an input, either as a command-line argument or by prompting the user.
+
+Identify image files: Iterate through the image files in the folder, processing them in chronological order from oldest to newest (or, optionally, only the most recent image if specified).
+
+Integrate Gemini 1.5 Pro Vision API Analysis: For each image:
+
+Construct a prompt for the Google Gemini Pro Vision model via API calls, including the image file and the following analysis request:
+<
+Analyze the provided image and generate two outputs:
+
+CSV List: Enclosed within Python-parseable square brackets [ ], create a CSV (Comma Separated Values) list. Each entry should be in the format <name:description>, detailing all identifiable objects or elements present in the image.
+
+Human Count Flag: Enclosed within Python-parseable curly braces { }, include a flag named <Humans_Detected> with its value set to the number of humans detected in the image. (e.g., {Humans_Detected: 0} if no humans are present).
+>
+
+Send the image and prompt to the Gemini Pro Vision API.
+
+Parse and Store Results:
+
+Extract the CSV list from the API response.
+Extract the the "Humans_Detected" flag number {e.g., number in Humans_Detected: 0}.
+
+Create or append to two HTML files named Names+descriptions.html and Humans_Counted.html in the same folder.
+
+For each image:
+
+In Names+descriptions.html, add a table row containing:
+
+The image filename.
+
+A clickable link (using the file:// protocol) to the image file within the folder.
+
+The CSV list of objects and descriptions from the Gemini response.
+
+In Humans_Counted.html, add a table row containing:
+
+The image filename.
+
+A clickable link to the image file.
+
+The value of the "Humans_Detected" flag.
+
+Ordering: Ensure that the entries in the HTML tables are ordered with the newest image's results appearing at the top of the tables.
+
+Include error handling for common issues like invalid folder paths, API errors, and image file processing errors.
+"""
+# Example Python Script begins here, and has not been debugged.
+import os
+import sys
+import requests
+import google.generativeai as genai
+import base64
+from datetime import datetime
+
+# Configure Gemini API
+genai.configure(api_key="YOUR_API_KEY")
+
+def get_folder_path():
+#   If the script is within the folder containing the images, use:
+    script_dir = os.path.dirname(os.path.abspath(__file__))  # Get directory of the script
+        return script_dir
+    #Gets the folder path from command-line argument or user input.  #commented-inactive
+    #if len(sys.argv) > 1:
+    #    return sys.argv[1]
+    #else:
+    #    return input("Enter the folder path: ")
+
+def get_image_files(folder_path):
+    #Gets a list of image files in the folder, sorted chronologically
+    image_extensions = ['.jpg', '.jpeg', '.png', '.gif', '.bmp']  # Add more if needed
+    image_files = []
+    try:
+        for filename in os.listdir(folder_path):
+            if any(filename.lower().endswith(ext) for ext in image_extensions):
+                filepath = os.path.join(folder_path, filename)
+                timestamp = os.path.getctime(filepath)  # Get creation time for sorting
+                image_files.append((filepath, timestamp))
+        image_files.sort(key=lambda x: x[1])  # Sort by creation time (oldest to newest)
+        return [filepath for filepath, _ in image_files]
+    except FileNotFoundError:
+        print("Error: Folder not found.")
+        return []
+    except Exception as e:
+        print(f"Error accessing files: {e}")
+        return []
+
+def analyze_image_with_gemini(image_path):
+   #Analyzes the image using Gemini Pro Vision API.
+    try:
+        with open(image_path, "rb") as f:
+            img_data = f.read()
+        img_b64 = base64.b64encode(img_data).decode("utf-8")
+
+        model = genai.GenerativeModel('gemini-pro-vision')
+        prompt = """Analyze the provided image and generate two outputs:
+
+CSV List: Enclosed within Python-parseable square brackets [ ], create a CSV (Comma Separated Values) list. Each entry should be in the format "name:description", detailing all identifiable objects or elements present in the image.
+
+Human Count Flag: Enclosed within Python-parseable curly braces { }, include a flag named "Humans_Detected" with its value set to the number of humans detected in the image. (e.g., {Humans_Detected: 0} if no humans are present)."""
+
+        response = model.generate_content([prompt, {"mime_type": "image/jpeg", "data": img_b64}])  # Assuming JPEG, adjust if needed
+
+        text = response.text
+
+        # Extract CSV list and Humans_Detected flag (basic parsing, adjust for complex cases)
+        csv_start = text.find("[")
+        csv_end = text.find("]")
+        csv_list = text[csv_start + 1:csv_end] if csv_start != -1 and csv_end != -1 else ""
+
+        humans_start = text.find("{Humans_Detected:")
+        humans_end = text.find("}", humans_start)
+        humans_detected = text[humans_start + len("{Humans_Detected:"):humans_end].strip() if humans_start != -1 and humans_end != -1 else ""
+
+        return csv_list.strip(), humans_detected
+    except Exception as e:
+        print(f"Error analyzing image {image_path}: {e}")
+        return "", ""
+
+def generate_html_reports(folder_path, image_files, results):
+    #Generates HTML reports with image analysis results.
+    names_desc_html = os.path.join(folder_path, "Names+descriptions.html")
+    humans_count_html = os.path.join(folder_path, "Humans_Counted.html")
+
+    # Initialize or append to Names+descriptions.html
+    with open(names_desc_html, "w" if not os.path.exists(names_desc_html) else "a", encoding="utf-8") as f:
+        if not os.path.exists(names_desc_html):  # Write HTML header if new file
+            f.write("""<html><head><title>Names and Descriptions</title></head><body>
+            <table border="1"><tr><th>Filename</th><th>Image Link</th><th>CSV List</th></tr>""")
+        for filepath, (csv_list, _) in zip(image_files[::-1], results[::-1]):  # Reverse for newest first
+            filename = os.path.basename(filepath)
+            file_uri = "file:///" + filepath.replace("\\", "/")
+            f.write(f"<tr><td>{filename}</td><td><a href='{file_uri}'>{filename}</a></td><td>{csv_list}</td></tr>")
+        if not os.path.exists(names_desc_html):
+            f.write("</table></body></html>")
+
+    # Initialize or append to Humans_Counted.html
+    with open(humans_count_html, "w" if not os.path.exists(humans_count_html) else "a", encoding="utf-8") as f:
+        if not os.path.exists(humans_count_html):  # Write HTML header if new file
+            f.write("""<html><head><title>Humans Counted</title></head><body>
+            <table border="1"><tr><th>Filename</th><th>Image Link</th><th>Humans Detected</th></tr>""")
+        for filepath, (_, humans_detected) in zip(image_files[::-1], results[::-1]):  # Reverse for newest first
+            filename = os.path.basename(filepath)
+            file_uri = "file:///" + filepath.replace("\\", "/")
+            f.write(f"<tr><td>{filename}</td><td><a href='{file_uri}'>{filename}</a></td><td>{humans_detected}</td></tr>")
+        if not os.path.exists(humans_count_html):
+            f.write("</table></body></html>")
+
+def main():
+    #Main function to execute the script.
+    folder_path = get_folder_path()
+    if not folder_path:
+        return
+
+    image_files = get_image_files(folder_path)
+    if not image_files:
+        return
+
+    results = []
+    for filepath in image_files:
+        csv_list, humans_detected = analyze_image_with_gemini(filepath)
+        results.append((csv_list, humans_detected))
+
+    generate_html_reports(folder_path, image_files, results)
+    print("Image analysis completed. HTML reports generated in the folder.")
+
+if __name__ == "__main__":
+    main()
